@@ -1,11 +1,16 @@
 from flask import Flask, request, jsonify
-from flask_cors import CORS, cross_origin
+#from flask_cors import CORS, cross_origin
 import joblib
 import numpy as np 
 import pandas as pd
 import json
 #import gunicorn
 import warnings
+from sklearn.ensemble import RandomForestClassifier
+from flask import Flask, request
+#from flask_cors import CORS, cross_origin
+from datetime import datetime
+import os
 warnings.filterwarnings("ignore")
 
 #==============================#
@@ -164,11 +169,11 @@ def probability_to_score(probabilities, model_classes):
     return round(prob_score, 3)
     
 app = Flask(__name__)
-CORS(app)
+#CORS(app)
 
 @app.route('/')
 def helloworld():
-    return 'Helloworld'
+    return 'welcome to risk scoring engine'
 
 # score testing example: http://localhost:5000/score?pl=5.0&pw=3.0&sl=1.2&sw=3.0
 # http://localhost:5000/score?pes_annual_spend=3000&pes_sectors=CONSUMER MEDICAL DEVICES,JANSSEN
@@ -254,8 +259,8 @@ def predict():
 
 #function for waitress by Gaurav
 
-def create_app():
-    return app
+#def create_app():
+ #   return app
 
 if __name__ == '__main__':
     app.run(debug=False)
