@@ -1,57 +1,261 @@
-#!/usr/bin/env python
-# -*- coding: utf-8 -*-
-
-#from sklearn.ensemble._forest import ForestClassifier
-from sklearn.ensemble import RandomForestClassifier
-from flask import Flask, request
-#from flask_cors import CORS, cross_origin
+from flask import Flask, request, jsonify
+from flask_cors import CORS, cross_origin
 import joblib
-import numpy as np
+import numpy as np 
 import pandas as pd
 import json
-from datetime import datetime
-#import gunicorn
-import os
+import gunicorn
+import warnings
+warnings.filterwarnings("ignore")
 
+#==============================#
+# HARDCODED VALUES
+# Spend quartiles
+# 0.25     2607.9700
+# 0.50    14472.8200
+# 0.75    84930.3775
+SPEND_QUARTILES = [2607.9700, 14472.8200, 84930.3775]
 
+# Concentration risks
+CONCENTRATION_RISKS = {"CONSUMER": {"Active Pharmaceutical Ingredients (API)": {"Active Pharmaceutical Ingredients - EM APIs": 10, "Active Pharmaceutical Ingredients - Generic APIs": 36, "Pharmaceutical Intermediates": 23}, "Agencies": {"Digital Marketing Services": 532, "Global creative services": 848, "Marketing sponsorships": 171, "Public Relations & Communications": 339, "Shopper Marketing": 184}, "Biologics & Vaccines Materials": {"Antibodies/Antigens": 6, "Biologic Processing Chemicals": 1, "Complex Biology & Cell Culture Media": 3, "Large Molecule Operating Supplies": 6, "Separation Technolgies": 15}, "Capital Equipment": {"Bespoke/special equipment": 116, "Building Equipment": 577, "Bulk Storage & Handling": 110, "CNC machines and 3D Printers": 27, "Conveyor Systems or Mechanical Product Transfer Equipment": 256, "Equipment for Large molecule API": 1, "Equipment for Liquids or Semi-Solid Processing or Primary Packaging": 117, "Equipment for Parenterals Processing or Primary Packaging": 18, "Equipment for Small molecule API": 9, "Equipment for Solid-Dose Processing": 90, "Equipment for Transdermals Processing or Primary Packaging": 16, "Injection molding equipment": 34, "Other Manufacturing, Process or Packaging Equipment": 593, "Packaging Equipment": 281, "Process Automation (PLCs, MES)": 163, "Sterilization Equipment": 20}, "Check Reqs": {"Miscellaneous - Check Reqs": 1}, "Chemicals": {"Acids / Buffers / Salts": 76, "Actives / Naturals": 142, "Adhesives - Chemicals": 8, "Alcohols / Solvents": 48, "Capsules": 2, "Chemicals Undefined": 169, "Conditioner / Emollients": 56, "Corn Derivatives / Sweeteners": 47, "Dyes / Colorants": 23, "Emulsifiers": 18, "Exfoliates": 14, "Fatty Acids & Fatty Alcohols": 21, "Flavors / Fragrances": 42, "Glycerin": 10, "Inorganic": 3, "Mineral Oil / Petrolatum": 30, "Preservatives": 17, "Silicones": 8, "Soap Chips": 1, "Sunscreens": 9, "Surfactants": 21, "Talc": 8, "Thickeners": 29, "Vitamins": 86}, "Clinical Development": {"Biostats, Programming, Medical Writing": 17, "Central Electrocardiogram (ECG) and Respiratory Services": 1, "Central Imaging": 1, "Central Labs": 18, "Clinical Investigator Payments": 1, "Clinical Translations": 11, "Data Management": 13, "Development Consulting/KOLs/Advisory Boards": 16, "EDC/eClinical Systems": 1, "Early Development Sites": 1, "Flexible Clinical/Insourced Staffing": 1, "Independent Drug Monitoring (IDM)": 1, "Institutional Review Board/Ethics Committee": 3, "Medical Monitoring": 3, "Medical Safety & Pharmacovigilance": 10, "Patient Recruitment & Related Printed Materials": 5, "Programmatic CRO & ARO": 47, "Quality & Compliance": 9, "Rater Scale and PRO": 4, "Rater Training & Cognitive Batteries": 2, "Regulatory Affairs": 103, "ePRO/eCOA": 5}, "Construction & Project Management": {"Basic Capital Construction": 358, "Capital Construction Services": 525, "Furniture & Fit out": 213}, "Corporate Services": {"Corporate Services - Consulting (Non-IT)": 594, "Corporate Services - Financial Services": 7, "Corporate Services - Financial Services - Audit Services": 54, "Corporate Services - Financial Services Tax Consulting": 172, "Corporate Services - Insurance": 126, "Corporate Services - Legal Services": 415, "Corporate Services - Managed Services (Non-IT)": 52, "Technical Services - Memberships & Subscriptions": 315, "Technical Services - Quality": 65, "Technical Services - Translations": 95}, "Distribution & Warehousing": {"Distribution, Warehousing & Facility Logistics": 241}, "Electronic Systems": {"Electro Mechanical": 37}, "External Manufacturing - EM": {"Bar Soaps": 10, "EM Implants": 8, "EM Instruments": 63, "EM Other": 162, "Finished Product Packaging": 53, "Liquids (non regulated)": 75, "Liquids (regulated)": 32, "Parenterals": 35, "Plastics Processing": 56, "Solid Dosage Processing (Regulated)": 54, "Sterilization Services": 12, "Wipes & SP": 29}, "Facility Maintenance & Service": {"Environmental Health & Safety": 722, "Facility Maintenance (HARD)": 1160, "Facility Services (SOFT)": 840, "Integrated Building and Facility Maintenance": 397, "Management Services": 34, "Office Supplies": 593}, "Fleet": {"Accident Management Services": 2, "Fleet Management Services": 356, "Fleet OEM Vehicles": 58}, "Global Strategic Insights": {"Analytics": 186, "Primary Market Research": 309, "Real World Evidence": 18, "Secondary and Syndicated Data": 208}, "HR Services": {"HR Services - Contingent Labor": 359, "HR Services - Employee Services": 755, "HR Services - Learning and Development": 807, "HR Services - Talent Acquisition": 173, "HR Services - Talent Mobility": 83}, "IT APP Dev & Maintenance": {"IT Application Development": 345, "IT Application Support": 141}, "IT Infrastructure": {"IT Infrastructure - Data Center Hardware & Services": 194, "IT Infrastructure - Help Desk Services": 15, "IT Infrastructure - Mobile Communications Products and Services": 226, "IT Infrastructure - Network Hardware & Managed Services": 438, "IT Infrastructure - Network Transport Data/Voice": 117, "IT Infrastructure - Personal Computers": 130, "IT Infrastructure - Personal Productivity Solutions": 15, "IT Infrastructure - Print Services": 147, "IT Infrastructure - Security & Risk Mgt.": 8}, "IT Software": {"IT Software": 200, "IT Software Maintenance": 184, "IT Software as a Service Subscriptions": 240}, "Maintenance & Repair Operations": {"MRO (Maintenance & Repair Operations)": 1701, "Manufacturing components & supplies": 391, "Tooling": 574}, "Marketing Operations": {"Consumer Promotion & In-Store Displays (POS)": 722, "Direct Marketing & Fulfillment": 394, "Events, Conventions, Congresses & Logistics (Includes Booths)": 393, "Marketing Materials": 504}, "Media": {"Global Media Agencies": 348}, "Metals": {"Casting": 5, "Ceramics": 2, "Fastening Components": 1, "Forging": 6, "Harmonic Blades": 1, "Machined Components": 3, "Power Tool Components": 20, "Raw materials": 6, "Secondary Operations": 23, "Stamped/Sheet Components": 3, "Sub-Assemblies": 1, "Tubing/Shafts": 1, "Wire Products/Spring/Coils": 3}, "Packaging": {"Bottles/closures/lids/jars": 137, "Cans": 6, "Cartons": 97, "Corrugate": 62, "Fibers Non-woven (FNW)": 115, "Films": 104, "Foils": 13, "Injection Molded": 20, "Labels": 98, "Leaflets/brochures/inserts": 26, "Parenteral Packaging": 6, "Pumps": 17, "Thermoforms": 24, "Tubes": 25, "Unclassified Packaging": 435}, "Precision Plastics": {"All Gaskets and Seals": 3, "Blow Molding": 11, "Extrusions - Plastics": 13, "Injection Moldings": 19, "Machined Plastics": 2, "Resin/Molding compounds": 31}, "Professional Education & Access": {"Access & Affordability": 19, "Professional & Medical Education (Excls. Booth & Logistics)": 237}, "Real Estate and Energy": {"Energy - Utilities": 2, "Energy Generation Utility Renewable & Fuel": 10, "Energy Management": 46, "Real Estate Portfolio Management": 33, "Real Estate Transactional Management": 95}, "Research": {"Analytical Development & Testing": 303, "Bioanalysis/PK/ADME": 16, "Biology/Biologics": 27, "Biomarker Laboratories": 6, "Clinical Logistics": 21, "Clinical Packaging & Labeling Services": 11, "Clinical Trial Ancillary Supplies": 10, "Comparators/Co-Medications": 2, "Engineering Services & Product Development": 171, "Human Biomaterials": 14, "Lab Supplies, Services & Equipment": 1060, "Laboratory Animals and Animal Tissue": 2, "Large Molecule CMC Development & Manufacturing": 2, "Medicinal Chemistry": 6, "Other Discovery & Preclinical": 5, "Packaging & Device Development": 27, "Research Consulting/KOLs/Advisory Boards": 38, "Small Molecule CMC Development & Manufacturing": 5, "Toxicology, Pathology, & Biocompatibility": 20}, "Sales & Distributor Services": {"Call Centers (including sales, complaints, inquiry)": 28, "Distributor Services": 227, "Field Force Services": 138, "Retail Brokers & Merchandising": 238, "eCommerce Services": 63}, "Transportation": {"Air": 36, "Customs Brokerage": 109, "Intermodal (RAIL)": 12, "Motor/Truck": 405, "Ocean": 39, "Parcel/Small Package": 91, "Premium Courier": 126, "Transportation": 157}, "Travel, Meeting & Events": {"Air Travel (Individual & Group)": 107, "Car Rental": 62, "Corporate Aviation Fleet": 120, "Ground Transportation (Black Car, Railway)": 536, "Hotel (Group meetings & events)": 893, "Hotel (Individual stays)": 356, "R&D Advisory Board / Advisory Committee Meetings": 5}, "Uncategorized": {"Unmapped": 4008}}, "CONSUMER MEDICAL DEVICES": {"Active Pharmaceutical Ingredients (API)": {"Active Pharmaceutical Ingredients - Generic APIs": 3, "Pharmaceutical Intermediates": 3}, "Agencies": {"Digital Marketing Services": 277, "Global creative services": 268, "Marketing sponsorships": 246, "Public Relations & Communications": 72, "Shopper Marketing": 6}, "Biologics & Vaccines Materials": {"Biologic Processing Chemicals": 1, "Large Molecule Operating Supplies": 8, "Separation Technolgies": 9}, "Capital Equipment": {"Bespoke/special equipment": 94, "Building Equipment": 183, "Bulk Storage & Handling": 21, "CNC machines and 3D Printers": 19, "Conveyor Systems or Mechanical Product Transfer Equipment": 15, "Equipment for Liquids or Semi-Solid Processing or Primary Packaging": 21, "Equipment for Parenterals Processing or Primary Packaging": 7, "Equipment for Solid-Dose Processing": 12, "Equipment for Transdermals Processing or Primary Packaging": 3, "Injection molding equipment": 34, "Other Manufacturing, Process or Packaging Equipment": 567, "Packaging Equipment": 74, "Process Automation (PLCs, MES)": 86, "Sterilization Equipment": 18}, "Check Reqs": {"Miscellaneous - Check Reqs": 1}, "Chemicals": {"Acids / Buffers / Salts": 13, "Actives / Naturals": 6, "Adhesives - Chemicals": 2, "Alcohols / Solvents": 6, "Chemicals Undefined": 46, "Dyes / Colorants": 3, "Emulsifiers": 1, "Fatty Acids & Fatty Alcohols": 2, "Flavors / Fragrances": 1, "Glycerin": 4, "Inorganic": 1, "Mineral Oil / Petrolatum": 1, "Silicones": 4, "Vitamins": 18}, "Clinical Development": {"Biostats, Programming, Medical Writing": 14, "Central Electrocardiogram (ECG) and Respiratory Services": 1, "Central Imaging": 1, "Central Labs": 5, "Clinical Translations": 26, "Data Management": 9, "Development Consulting/KOLs/Advisory Boards": 17, "EDC/eClinical Systems": 2, "Flexible Clinical/Insourced Staffing": 1, "IWRS": 1, "Institutional Review Board/Ethics Committee": 2, "Medical Monitoring": 3, "Medical Safety & Pharmacovigilance": 2, "Patient Recruitment & Related Printed Materials": 1, "Programmatic CRO & ARO": 10, "Quality & Compliance": 3, "Rater Scale and PRO": 1, "Rater Training & Cognitive Batteries": 1, "Regulatory Affairs": 53, "ePRO/eCOA": 1}, "Construction & Project Management": {"Basic Capital Construction": 66, "Capital Construction Services": 286, "Furniture & Fit out": 93}, "Corporate Services": {"Corporate Services - Consulting (Non-IT)": 212, "Corporate Services - Financial Services": 2, "Corporate Services - Financial Services - Audit Services": 12, "Corporate Services - Financial Services Tax Consulting": 61, "Corporate Services - Insurance": 49, "Corporate Services - Legal Services": 133, "Corporate Services - Managed Services (Non-IT)": 16, "Technical Services - Memberships & Subscriptions": 134, "Technical Services - Quality": 39, "Technical Services - Translations": 85}, "Distribution & Warehousing": {"Distribution, Warehousing & Facility Logistics": 88}, "Electronic Systems": {"Electro Mechanical": 47}, "External Manufacturing - EM": {"EM Implants": 4, "EM Instruments": 40, "EM Other": 61, "Finished Product Packaging": 8, "Liquids (non regulated)": 7, "Liquids (regulated)": 3, "Parenterals": 2, "Plastics Processing": 4, "Solid Dosage Processing (Regulated)": 3, "Sterilization Services": 9, "Wipes & SP": 4}, "Facility Maintenance & Service": {"Environmental Health & Safety": 253, "Facility Maintenance (HARD)": 429, "Facility Services (SOFT)": 310, "Integrated Building and Facility Maintenance": 112, "Management Services": 25, "Office Supplies": 342}, "Fleet": {"Accident Management Services": 4, "Fleet Management Services": 182, "Fleet OEM Vehicles": 9}, "Global Strategic Insights": {"Analytics": 54, "Primary Market Research": 98, "Real World Evidence": 10, "Secondary and Syndicated Data": 59}, "HR Services": {"HR Services - Contingent Labor": 159, "HR Services - Employee Services": 250, "HR Services - Learning and Development": 416, "HR Services - Talent Acquisition": 85, "HR Services - Talent Mobility": 33}, "IT APP Dev & Maintenance": {"IT Application Development": 121, "IT Application Support": 51}, "IT Infrastructure": {"IT Infrastructure - Data Center Hardware & Services": 52, "IT Infrastructure - Help Desk Services": 6, "IT Infrastructure - Mobile Communications Products and Services": 146, "IT Infrastructure - Network Hardware & Managed Services": 168, "IT Infrastructure - Network Transport Data/Voice": 46, "IT Infrastructure - Personal Computers": 45, "IT Infrastructure - Personal Productivity Solutions": 8, "IT Infrastructure - Print Services": 60, "IT Infrastructure - Security & Risk Mgt.": 4}, "IT Software": {"IT Software": 119, "IT Software Maintenance": 100, "IT Software as a Service Subscriptions": 111}, "Maintenance & Repair Operations": {"MRO (Maintenance & Repair Operations)": 668, "Manufacturing components & supplies": 225, "Tooling": 357}, "Marketing Operations": {"Consumer Promotion & In-Store Displays (POS)": 184, "Direct Marketing & Fulfillment": 158, "Events, Conventions, Congresses & Logistics (Includes Booths)": 225, "Marketing Materials": 250}, "Media": {"Global Media Agencies": 100}, "Metals": {"Ceramics": 1, "Fastening Components": 2, "Forging": 1, "Machined Components": 22, "Powder Metal Tech": 1, "Power Tool Components": 1, "Raw materials": 5, "Secondary Operations": 12, "Stamped/Sheet Components": 2, "Wire Products/Spring/Coils": 11}, "Packaging": {"Bottles/closures/lids/jars": 10, "Cartons": 24, "Corrugate": 23, "Fibers Non-woven (FNW)": 8, "Films": 3, "Foils": 5, "Injection Molded": 2, "Labels": 20, "Leaflets/brochures/inserts": 16, "Parenteral Packaging": 5, "Pumps": 1, "Thermoforms": 5, "Tubes": 5, "Unclassified Packaging": 155}, "Precision Plastics": {"Blow Molding": 2, "Drug Delivery Devices": 1, "Elastomer, rubber injection moldings": 3, "Extrusions - Plastics": 5, "Injection Moldings": 36, "Plastics Additive Manufacturing (3D Printing)": 8, "Resin/Molding compounds": 48}, "Professional Education & Access": {"Access & Affordability": 14, "Professional & Medical Education (Excls. Booth & Logistics)": 231}, "Real Estate and Energy": {"Energy Management": 9, "Real Estate Portfolio Management": 15, "Real Estate Transactional Management": 57}, "Research": {"Analytical Development & Testing": 54, "Bioanalysis/PK/ADME": 4, "Biology/Biologics": 2, "Biomarker Laboratories": 2, "Clinical Logistics": 10, "Clinical Packaging & Labeling Services": 12, "Clinical Trial Ancillary Supplies": 28, "Engineering Services & Product Development": 342, "Human Biomaterials": 2, "Lab Supplies, Services & Equipment": 556, "Laboratory Animals and Animal Tissue": 9, "Medicinal Chemistry": 2, "Other Discovery & Preclinical": 1, "Packaging & Device Development": 9, "Research Consulting/KOLs/Advisory Boards": 27, "Toxicology, Pathology, & Biocompatibility": 8, "Vaccines CMC Development & Manufacturing": 6}, "Sales & Distributor Services": {"Call Centers (including sales, complaints, inquiry)": 20, "Distributor Services": 42, "Field Force Services": 51, "Retail Brokers & Merchandising": 59, "eCommerce Services": 9}, "Transportation": {"Air": 17, "Customs Brokerage": 36, "Intermodal (RAIL)": 3, "Motor/Truck": 72, "Ocean": 12, "Parcel/Small Package": 67, "Premium Courier": 96, "Transportation": 41}, "Travel, Meeting & Events": {"Air Travel (Individual & Group)": 93, "Car Rental": 36, "Corporate Aviation Fleet": 80, "Ground Transportation (Black Car, Railway)": 409, "Hotel (Group meetings & events)": 718, "Hotel (Individual stays)": 308}, "Uncategorized": {"Unmapped": 1160}}, "CORPORATE": {"Agencies": {"Digital Marketing Services": 80, "Global creative services": 172, "Marketing sponsorships": 34, "Public Relations & Communications": 91, "Shopper Marketing": 4}, "Biologics & Vaccines Materials": {"Large Molecule Operating Supplies": 1}, "Capital Equipment": {"Bespoke/special equipment": 3, "Building Equipment": 39, "Bulk Storage & Handling": 1, "CNC machines and 3D Printers": 3, "Equipment for Liquids or Semi-Solid Processing or Primary Packaging": 1, "Injection molding equipment": 1, "Other Manufacturing, Process or Packaging Equipment": 12, "Packaging Equipment": 4, "Process Automation (PLCs, MES)": 5, "Sterilization Equipment": 2}, "Chemicals": {"Acids / Buffers / Salts": 5, "Actives / Naturals": 3, "Adhesives - Chemicals": 1, "Chemicals Undefined": 3, "Corn Derivatives / Sweeteners": 1, "Silicones": 1, "Surfactants": 1}, "Clinical Development": {"Biostats, Programming, Medical Writing": 4, "Central Labs": 4, "Clinical Translations": 3, "Data Management": 2, "Development Consulting/KOLs/Advisory Boards": 10, "EDC/eClinical Systems": 1, "IWRS": 1, "Independent Drug Monitoring (IDM)": 1, "Institutional Review Board/Ethics Committee": 1, "Medical Monitoring": 1, "Medical Safety & Pharmacovigilance": 3, "Programmatic CRO & ARO": 3, "Regulatory Affairs": 4}, "Construction & Project Management": {"Basic Capital Construction": 37, "Capital Construction Services": 213, "Furniture & Fit out": 69}, "Corporate Services": {"Corporate Services - Consulting (Non-IT)": 497, "Corporate Services - Financial Services": 5, "Corporate Services - Financial Services - Audit Services": 18, "Corporate Services - Financial Services Tax Consulting": 103, "Corporate Services - Insurance": 49, "Corporate Services - Legal Services": 753, "Corporate Services - Managed Services (Non-IT)": 34, "Technical Services - Memberships & Subscriptions": 134, "Technical Services - Quality": 29, "Technical Services - Translations": 44}, "Distribution & Warehousing": {"Distribution, Warehousing & Facility Logistics": 9}, "Electronic Systems": {"Electro Mechanical": 2}, "Exclusions": {"Intercompany Transactions": 5}, "External Manufacturing - EM": {"Bar Soaps": 1, "EM Implants": 3, "EM Instruments": 7, "EM Other": 7, "Finished Product Packaging": 2, "Liquids (non regulated)": 5, "Liquids (regulated)": 1, "Parenterals": 2, "Plastics Processing": 4, "Solid Dosage Processing (Regulated)": 1, "Sterilization Services": 2, "Wipes & SP": 2}, "Facility Maintenance & Service": {"Environmental Health & Safety": 90, "Facility Maintenance (HARD)": 102, "Facility Services (SOFT)": 126, "Integrated Building and Facility Maintenance": 100, "Management Services": 24, "Office Supplies": 382}, "Fleet": {"Fleet Management Services": 172, "Fleet OEM Vehicles": 47}, "Global Strategic Insights": {"Analytics": 53, "Primary Market Research": 79, "Real World Evidence": 19, "Secondary and Syndicated Data": 35}, "HR Services": {"HR Services - Contingent Labor": 115, "HR Services - Employee Services": 327, "HR Services - Learning and Development": 533, "HR Services - Talent Acquisition": 111, "HR Services - Talent Mobility": 32}, "IT APP Dev & Maintenance": {"IT Application Development": 315, "IT Application Support": 183}, "IT Infrastructure": {"IT Infrastructure - Data Center Hardware & Services": 139, "IT Infrastructure - Help Desk Services": 13, "IT Infrastructure - Mobile Communications Products and Services": 140, "IT Infrastructure - Network Hardware & Managed Services": 191, "IT Infrastructure - Network Transport Data/Voice": 45, "IT Infrastructure - Personal Computers": 37, "IT Infrastructure - Personal Productivity Solutions": 24, "IT Infrastructure - Print Services": 26, "IT Infrastructure - Security & Risk Mgt.": 49}, "IT Software": {"IT Software": 140, "IT Software Maintenance": 244, "IT Software as a Service Subscriptions": 225}, "Maintenance & Repair Operations": {"MRO (Maintenance & Repair Operations)": 101, "Tooling": 19}, "Marketing Operations": {"Consumer Promotion & In-Store Displays (POS)": 27, "Direct Marketing & Fulfillment": 49, "Events, Conventions, Congresses & Logistics (Includes Booths)": 121, "Marketing Materials": 60}, "Media": {"Global Media Agencies": 39}, "Metals": {"Forging": 1, "Machined Components": 3, "Powder Metal Tech": 1, "Raw materials": 1, "Secondary Operations": 3}, "Packaging": {"Bottles/closures/lids/jars": 3, "Cartons": 5, "Corrugate": 1, "Fibers Non-woven (FNW)": 2, "Foils": 1, "Labels": 1, "Parenteral Packaging": 2, "Unclassified Packaging": 10}, "Precision Plastics": {"Blow Molding": 1, "Resin/Molding compounds": 2}, "Professional Education & Access": {"Access & Affordability": 4, "Professional & Medical Education (Excls. Booth & Logistics)": 41}, "Real Estate and Energy": {"Energy Management": 5, "Real Estate Portfolio Management": 15, "Real Estate Transactional Management": 14}, "Research": {"Analytical Development & Testing": 11, "Bioanalysis/PK/ADME": 9, "Biology/Biologics": 14, "Biomarker Laboratories": 12, "Clinical Logistics": 3, "Clinical Packaging & Labeling Services": 2, "Clinical Trial Ancillary Supplies": 5, "Comparators/Co-Medications": 1, "Engineering Services & Product Development": 113, "Human Biomaterials": 4, "Lab Supplies, Services & Equipment": 203, "Laboratory Animals and Animal Tissue": 2, "Large Molecule CMC Development & Manufacturing": 2, "Medicinal Chemistry": 3, "Packaging & Device Development": 3, "Research Consulting/KOLs/Advisory Boards": 29, "Toxicology, Pathology, & Biocompatibility": 8}, "Sales & Distributor Services": {"Call Centers (including sales, complaints, inquiry)": 7, "Distributor Services": 10, "Field Force Services": 10, "Retail Brokers & Merchandising": 3, "eCommerce Services": 3}, "Transportation": {"Air": 4, "Customs Brokerage": 9, "Motor/Truck": 14, "Parcel/Small Package": 16, "Premium Courier": 40, "Transportation": 9}, "Travel, Meeting & Events": {"Air Travel (Individual & Group)": 79, "Car Rental": 28, "Corporate Aviation Fleet": 92, "Ground Transportation (Black Car, Railway)": 284, "Hotel (Group meetings & events)": 650, "Hotel (Individual stays)": 239, "R&D Advisory Board / Advisory Committee Meetings": 7}, "Uncategorized": {"Unmapped": 809}}, "JANSSEN": {"Active Pharmaceutical Ingredients (API)": {"Active Pharmaceutical Ingredients - EM APIs": 26, "Active Pharmaceutical Ingredients - Generic APIs": 49, "Pharmaceutical Intermediates": 137}, "Agencies": {"Digital Marketing Services": 838, "Global creative services": 1199, "Marketing sponsorships": 651, "Public Relations & Communications": 473, "Shopper Marketing": 10}, "Biologics & Vaccines Materials": {"Antibodies/Antigens": 16, "Biologic Processing Chemicals": 4, "Complex Biology & Cell Culture Media": 11, "Large Molecule Operating Supplies": 42, "Separation Technolgies": 44}, "Capital Equipment": {"Bespoke/special equipment": 88, "Building Equipment": 664, "Bulk Storage & Handling": 66, "CNC machines and 3D Printers": 13, "Conveyor Systems or Mechanical Product Transfer Equipment": 28, "Equipment for Large molecule API": 83, "Equipment for Liquids or Semi-Solid Processing or Primary Packaging": 45, "Equipment for Parenterals Processing or Primary Packaging": 32, "Equipment for Small molecule API": 76, "Equipment for Solid-Dose Processing": 54, "Equipment for Transdermals Processing or Primary Packaging": 9, "Injection molding equipment": 8, "Other Manufacturing, Process or Packaging Equipment": 644, "Packaging Equipment": 170, "Process Automation (PLCs, MES)": 170, "Sterilization Equipment": 42}, "Check Reqs": {"Miscellaneous - Check Reqs": 6}, "Chemicals": {"Acids / Buffers / Salts": 47, "Actives / Naturals": 31, "Adhesives - Chemicals": 5, "Alcohols / Solvents": 29, "Capsules": 2, "Chemicals Undefined": 238, "Conditioner / Emollients": 7, "Corn Derivatives / Sweeteners": 14, "Dyes / Colorants": 8, "Emulsifiers": 6, "Fatty Acids & Fatty Alcohols": 5, "Flavors / Fragrances": 21, "Glycerin": 3, "Inorganic": 2, "Mineral Oil / Petrolatum": 7, "Preservatives": 6, "Silicones": 3, "Soap Chips": 3, "Sunscreens": 2, "Surfactants": 9, "Talc": 1, "Thickeners": 15, "Vitamins": 42}, "Clinical Development": {"Adjudication": 8, "Biostats, Programming, Medical Writing": 118, "Central Electrocardiogram (ECG) and Respiratory Services": 9, "Central Imaging": 23, "Central Labs": 105, "Clinical Investigator Payments": 13, "Clinical Translations": 63, "Data Management": 72, "Development Consulting/KOLs/Advisory Boards": 117, "EDC/eClinical Systems": 42, "Early Development Sites": 5, "Epidemiology": 18, "Flexible Clinical/Insourced Staffing": 29, "IWRS": 9, "Independent Drug Monitoring (IDM)": 32, "Institutional Review Board/Ethics Committee": 196, "Medical Monitoring": 24, "Medical Safety & Pharmacovigilance": 47, "Patient Recruitment & Related Printed Materials": 202, "Programmatic CRO & ARO": 166, "Quality & Compliance": 21, "Rater Scale and PRO": 61, "Rater Training & Cognitive Batteries": 9, "Regulatory Affairs": 240, "ePRO/eCOA": 32}, "Construction & Project Management": {"Basic Capital Construction": 401, "Capital Construction Services": 652, "Furniture & Fit out": 325}, "Corporate Services": {"Corporate Services - Consulting (Non-IT)": 1746, "Corporate Services - Financial Services": 4, "Corporate Services - Financial Services - Audit Services": 53, "Corporate Services - Financial Services Tax Consulting": 426, "Corporate Services - Insurance": 179, "Corporate Services - Legal Services": 640, "Corporate Services - Managed Services (Non-IT)": 64, "Technical Services - Memberships & Subscriptions": 776, "Technical Services - Quality": 81, "Technical Services - Translations": 283}, "Distribution & Warehousing": {"Distribution, Warehousing & Facility Logistics": 205}, "Electronic Systems": {"Electro Mechanical": 32}, "Exclusions": {"Intercompany Transactions": 1}, "External Manufacturing - EM": {"Bar Soaps": 1, "EM Implants": 17, "EM Instruments": 128, "EM Other": 168, "Finished Product Packaging": 33, "Liquids (non regulated)": 29, "Liquids (regulated)": 15, "Parenterals": 15, "Plastics Processing": 26, "Solid Dosage Processing (Regulated)": 40, "Sterilization Services": 10, "Wipes & SP": 11}, "Facility Maintenance & Service": {"Environmental Health & Safety": 782, "Facility Maintenance (HARD)": 1310, "Facility Services (SOFT)": 1076, "Integrated Building and Facility Maintenance": 844, "Management Services": 60, "Office Supplies": 1024}, "Fleet": {"Accident Management Services": 12, "Fleet Management Services": 484, "Fleet OEM Vehicles": 70}, "Global Strategic Insights": {"Analytics": 480, "Primary Market Research": 497, "Real World Evidence": 177, "Secondary and Syndicated Data": 501}, "HR Services": {"HR Services - Contingent Labor": 1095, "HR Services - Employee Services": 1036, "HR Services - Learning and Development": 2210, "HR Services - Talent Acquisition": 382, "HR Services - Talent Mobility": 123}, "IT APP Dev & Maintenance": {"IT Application Development": 644, "IT Application Support": 286}, "IT Infrastructure": {"IT Infrastructure - Data Center Hardware & Services": 231, "IT Infrastructure - Help Desk Services": 38, "IT Infrastructure - Mobile Communications Products and Services": 344, "IT Infrastructure - Network Hardware & Managed Services": 610, "IT Infrastructure - Network Transport Data/Voice": 170, "IT Infrastructure - Personal Computers": 218, "IT Infrastructure - Personal Productivity Solutions": 38, "IT Infrastructure - Print Services": 150, "IT Infrastructure - Security & Risk Mgt.": 18}, "IT Software": {"IT Software": 491, "IT Software Maintenance": 384, "IT Software as a Service Subscriptions": 425}, "Maintenance & Repair Operations": {"MRO (Maintenance & Repair Operations)": 1664, "Manufacturing components & supplies": 325, "Tooling": 915}, "Marketing Operations": {"Consumer Promotion & In-Store Displays (POS)": 164, "Direct Marketing & Fulfillment": 218, "Events, Conventions, Congresses & Logistics (Includes Booths)": 1565, "Marketing Materials": 662}, "Media": {"Global Media Agencies": 392}, "Metals": {"Casting": 2, "Ceramics": 1, "Fastening Components": 2, "Forging": 4, "Machined Components": 12, "Powder Metal Tech": 1, "Power Tool Components": 9, "Raw materials": 21, "Secondary Operations": 10, "Sharps/Knives": 1, "Stamped/Sheet Components": 3, "Sub-Assemblies": 1, "Tubing/Shafts": 2, "Wire Products/Spring/Coils": 2}, "Packaging": {"Bottles/closures/lids/jars": 44, "Cans": 1, "Cartons": 53, "Corrugate": 41, "Fibers Non-woven (FNW)": 25, "Films": 30, "Foils": 16, "Injection Molded": 5, "Labels": 51, "Leaflets/brochures/inserts": 30, "Parenteral Packaging": 16, "Pumps": 4, "Thermoforms": 19, "Tubes": 12, "Unclassified Packaging": 291}, "Precision Plastics": {"All Gaskets and Seals": 6, "Blow Molding": 4, "Drug Delivery Devices": 3, "Elastomer, rubber injection moldings": 1, "Extrusions - Plastics": 32, "Injection Moldings": 11, "Machined Plastics": 2, "Plastics Additive Manufacturing (3D Printing)": 2, "Resin/Molding compounds": 22}, "Professional Education & Access": {"Access & Affordability": 215, "Professional & Medical Education (Excls. Booth & Logistics)": 1650}, "Real Estate and Energy": {"Energy - Utilities": 6, "Energy Generation Utility Renewable & Fuel": 14, "Energy Management": 45, "Real Estate Portfolio Management": 60, "Real Estate Transactional Management": 200}, "Research": {"Analytical Development & Testing": 333, "Bioanalysis/PK/ADME": 117, "Biology/Biologics": 457, "Biomarker Laboratories": 173, "Clinical Logistics": 108, "Clinical Packaging & Labeling Services": 58, "Clinical Trial Ancillary Supplies": 125, "Comparators/Co-Medications": 19, "Engineering Services & Product Development": 221, "Human Biomaterials": 79, "Lab Supplies, Services & Equipment": 2096, "Laboratory Animals and Animal Tissue": 114, "Large Molecule CMC Development & Manufacturing": 68, "Medicinal Chemistry": 65, "Non-Clinical Licensing Payment": 1, "Other Discovery & Preclinical": 52, "Packaging & Device Development": 105, "Research Consulting/KOLs/Advisory Boards": 292, "Research Grants/Sponsorships": 1, "Small Molecule CMC Development & Manufacturing": 91, "Toxicology, Pathology, & Biocompatibility": 117, "Vaccines CMC Development & Manufacturing": 19}, "Sales & Distributor Services": {"Call Centers (including sales, complaints, inquiry)": 43, "Distributor Services": 158, "Field Force Services": 112, "Retail Brokers & Merchandising": 34, "eCommerce Services": 13}, "Transportation": {"Air": 31, "Customs Brokerage": 135, "Intermodal (RAIL)": 4, "Motor/Truck": 215, "Ocean": 19, "Parcel/Small Package": 138, "Premium Courier": 159, "Transportation": 97}, "Travel, Meeting & Events": {"Air Travel (Individual & Group)": 141, "Car Rental": 83, "Corporate Aviation Fleet": 222, "Ground Transportation (Black Car, Railway)": 701, "Hotel (Group meetings & events)": 1820, "Hotel (Individual stays)": 472, "R&D Advisory Board / Advisory Committee Meetings": 72}, "Uncategorized": {"Unmapped": 1889}}, "MEDICAL DEVICES": {"Active Pharmaceutical Ingredients (API)": {"Active Pharmaceutical Ingredients - EM APIs": 2, "Active Pharmaceutical Ingredients - Generic APIs": 15, "Pharmaceutical Intermediates": 7}, "Agencies": {"Digital Marketing Services": 443, "Global creative services": 621, "Marketing sponsorships": 804, "Public Relations & Communications": 191, "Shopper Marketing": 11}, "Biologics & Vaccines Materials": {"Antibodies/Antigens": 5, "Complex Biology & Cell Culture Media": 6, "Large Molecule Operating Supplies": 7, "Separation Technolgies": 11}, "Capital Equipment": {"Bespoke/special equipment": 168, "Building Equipment": 544, "Bulk Storage & Handling": 141, "CNC machines and 3D Printers": 194, "Conveyor Systems or Mechanical Product Transfer Equipment": 21, "Equipment for Large molecule API": 6, "Equipment for Liquids or Semi-Solid Processing or Primary Packaging": 10, "Equipment for Parenterals Processing or Primary Packaging": 13, "Equipment for Small molecule API": 4, "Equipment for Solid-Dose Processing": 6, "Equipment for Transdermals Processing or Primary Packaging": 12, "Injection molding equipment": 21, "Other Manufacturing, Process or Packaging Equipment": 724, "Packaging Equipment": 164, "Process Automation (PLCs, MES)": 157, "Sterilization Equipment": 101}, "Chemicals": {"Acids / Buffers / Salts": 23, "Actives / Naturals": 18, "Adhesives - Chemicals": 9, "Alcohols / Solvents": 22, "Chemicals Undefined": 84, "Conditioner / Emollients": 6, "Corn Derivatives / Sweeteners": 3, "Dyes / Colorants": 5, "Emulsifiers": 1, "Exfoliates": 3, "Fatty Acids & Fatty Alcohols": 5, "Flavors / Fragrances": 9, "Glycerin": 3, "Inorganic": 2, "Mineral Oil / Petrolatum": 7, "Preservatives": 1, "Silicones": 4, "Soap Chips": 1, "Surfactants": 4, "Thickeners": 5, "Vitamins": 19}, "Clinical Development": {"Adjudication": 2, "Biostats, Programming, Medical Writing": 27, "Central Electrocardiogram (ECG) and Respiratory Services": 8, "Central Imaging": 10, "Central Labs": 35, "Clinical Investigator Payments": 1, "Clinical Translations": 31, "Data Management": 24, "Development Consulting/KOLs/Advisory Boards": 18, "EDC/eClinical Systems": 7, "Early Development Sites": 1, "Epidemiology": 1, "Flexible Clinical/Insourced Staffing": 15, "Independent Drug Monitoring (IDM)": 1, "Institutional Review Board/Ethics Committee": 34, "Medical Monitoring": 6, "Medical Safety & Pharmacovigilance": 10, "Patient Recruitment & Related Printed Materials": 8, "Programmatic CRO & ARO": 15, "Quality & Compliance": 15, "Rater Scale and PRO": 14, "Rater Training & Cognitive Batteries": 3, "Regulatory Affairs": 111, "ePRO/eCOA": 2}, "Construction & Project Management": {"Basic Capital Construction": 333, "Capital Construction Services": 615, "Furniture & Fit out": 347}, "Corporate Services": {"Corporate Services - Consulting (Non-IT)": 886, "Corporate Services - Financial Services": 6, "Corporate Services - Financial Services - Audit Services": 44, "Corporate Services - Financial Services Tax Consulting": 202, "Corporate Services - Insurance": 175, "Corporate Services - Legal Services": 493, "Corporate Services - Managed Services (Non-IT)": 49, "Technical Services - Memberships & Subscriptions": 404, "Technical Services - Quality": 98, "Technical Services - Translations": 173}, "Distribution & Warehousing": {"Distribution, Warehousing & Facility Logistics": 256}, "Electronic Systems": {"Electro Mechanical": 136}, "External Manufacturing - EM": {"Bar Soaps": 2, "EM Implants": 99, "EM Instruments": 281, "EM Other": 255, "Finished Product Packaging": 30, "Liquids (non regulated)": 33, "Liquids (regulated)": 11, "Parenterals": 14, "Plastics Processing": 23, "Solid Dosage Processing (Regulated)": 26, "Sterilization Services": 44, "Wipes & SP": 13}, "Facility Maintenance & Service": {"Environmental Health & Safety": 698, "Facility Maintenance (HARD)": 1077, "Facility Services (SOFT)": 1070, "Integrated Building and Facility Maintenance": 455, "Management Services": 65, "Office Supplies": 970}, "Fleet": {"Accident Management Services": 12, "Fleet Management Services": 510, "Fleet OEM Vehicles": 79}, "Global Strategic Insights": {"Analytics": 172, "Primary Market Research": 181, "Real World Evidence": 55, "Secondary and Syndicated Data": 129}, "HR Services": {"HR Services - Contingent Labor": 1084, "HR Services - Employee Services": 974, "HR Services - Learning and Development": 1403, "HR Services - Talent Acquisition": 332, "HR Services - Talent Mobility": 119}, "IT APP Dev & Maintenance": {"IT Application Development": 447, "IT Application Support": 214}, "IT Infrastructure": {"IT Infrastructure - Data Center Hardware & Services": 227, "IT Infrastructure - Help Desk Services": 56, "IT Infrastructure - Mobile Communications Products and Services": 318, "IT Infrastructure - Network Hardware & Managed Services": 1215, "IT Infrastructure - Network Transport Data/Voice": 159, "IT Infrastructure - Personal Computers": 213, "IT Infrastructure - Personal Productivity Solutions": 40, "IT Infrastructure - Print Services": 149, "IT Infrastructure - Security & Risk Mgt.": 12}, "IT Software": {"IT Software": 336, "IT Software Maintenance": 273, "IT Software as a Service Subscriptions": 294}, "Maintenance & Repair Operations": {"MRO (Maintenance & Repair Operations)": 1829, "Manufacturing components & supplies": 344, "Tooling": 1051}, "Marketing Operations": {"Consumer Promotion & In-Store Displays (POS)": 874, "Direct Marketing & Fulfillment": 263, "Events, Conventions, Congresses & Logistics (Includes Booths)": 996, "Marketing Materials": 650}, "Media": {"Global Media Agencies": 163}, "Metals": {"Anvil/Channel": 2, "Casting": 11, "Ceramics": 51, "Fastening Components": 11, "Forging": 15, "Harmonic Blades": 2, "Machined Components": 142, "Powder Metal Tech": 13, "Power Tool Components": 63, "Raw materials": 99, "Secondary Operations": 114, "Sharps/Knives": 2, "Stamped/Sheet Components": 24, "Sub-Assemblies": 5, "Tubing/Shafts": 22, "Wire Products/Spring/Coils": 40}, "Packaging": {"Bottles/closures/lids/jars": 21, "Cans": 49, "Cartons": 84, "Corrugate": 67, "Fibers Non-woven (FNW)": 57, "Films": 46, "Foils": 26, "Injection Molded": 17, "Labels": 114, "Leaflets/brochures/inserts": 49, "Parenteral Packaging": 10, "Pumps": 14, "Thermoforms": 29, "Tubes": 13, "Unclassified Packaging": 391}, "Precision Plastics": {"All Gaskets and Seals": 8, "Blow Molding": 174, "Elastomer, rubber injection moldings": 16, "Extrusions - Plastics": 158, "Injection Moldings": 52, "Machined Plastics": 24, "Plastics Additive Manufacturing (3D Printing)": 6, "Resin/Molding compounds": 131}, "Professional Education & Access": {"Access & Affordability": 63, "Professional & Medical Education (Excls. Booth & Logistics)": 1063}, "Real Estate and Energy": {"Energy - Utilities": 4, "Energy Generation Utility Renewable & Fuel": 7, "Energy Management": 48, "Real Estate Portfolio Management": 40, "Real Estate Transactional Management": 146}, "Research": {"Analytical Development & Testing": 165, "Bioanalysis/PK/ADME": 9, "Biology/Biologics": 88, "Biomarker Laboratories": 3, "Clinical Logistics": 31, "Clinical Packaging & Labeling Services": 46, "Clinical Trial Ancillary Supplies": 27, "Engineering Services & Product Development": 1197, "Human Biomaterials": 4, "Lab Supplies, Services & Equipment": 1218, "Laboratory Animals and Animal Tissue": 28, "Large Molecule CMC Development & Manufacturing": 1, "Medicinal Chemistry": 3, "Other Discovery & Preclinical": 19, "Packaging & Device Development": 40, "Research Consulting/KOLs/Advisory Boards": 39, "Small Molecule CMC Development & Manufacturing": 2, "Toxicology, Pathology, & Biocompatibility": 55}, "Sales & Distributor Services": {"Call Centers (including sales, complaints, inquiry)": 23, "Distributor Services": 269, "Field Force Services": 240, "Retail Brokers & Merchandising": 41, "eCommerce Services": 10}, "Transportation": {"Air": 41, "Customs Brokerage": 117, "Intermodal (RAIL)": 3, "Motor/Truck": 263, "Ocean": 19, "Parcel/Small Package": 160, "Premium Courier": 225, "Transportation": 193}, "Travel, Meeting & Events": {"Air Travel (Individual & Group)": 143, "Car Rental": 97, "Corporate Aviation Fleet": 238, "Ground Transportation (Black Car, Railway)": 742, "Hotel (Group meetings & events)": 1585, "Hotel (Individual stays)": 504, "R&D Advisory Board / Advisory Committee Meetings": 11, "R&D investigator Meetings": 1}, "Uncategorized": {"Ethicon Endo surgery Direct Materials": 1, "Unmapped": 5578}}}
+MAX_CONCENTRATION_MINIMUM = 5578
+CALCULATED_CONCENTRATION_RISK_MIN = 0
+CALCULATED_CONCENTRATION_RISK_MAX = 12.195808
 
+SPEND_X_CR_MIN = 0
+SPEND_X_CR_MAX = 12.195808
+
+# Criticality level
+MAX_CL_MIN = 4
+MAX_CL_METRIC = 2.093421
+MIN_CL_METRIC = 0
+
+# Notional Risk
+SECTOR_NOTIONAL_RISKS = {"CONSUMER": 4, "CONSUMER MEDICAL DEVICES": 5, "CORPORATE": 2, "JANSSEN": 4, "MEDICAL DEVICES": 4, "Unmapped": 2}
+CATEGORY_NOTIONAL_RISKS = {"Business Services - Corporate Services": 2, "Business Services - Fleet": 1, "Business Services - HR Services": 4, "Business Services - IT APP Dev & Maintenance": 5, "Business Services - IT Infrastructure": 5, "Business Services - IT Software": 5, "Business Services - Travel, Meeting & Events": 1, "Capital, Construction and Facility Services - Capital Equipment": 3, "Capital, Construction and Facility Services - Construction & Project Management": 4, "Capital, Construction and Facility Services - Facility Maintenance & Service": 3, "Capital, Construction and Facility Services - Maintenance & Repair Operations": 4, "Capital, Construction and Facility Services - Real Estate and Energy": 3, "Check Requests - Check Reqs": 4, "Exclusions - Exclusions": 3, "Logistics - Distribution & Warehousing": 4, "Logistics - Transportation": 3, "Marketing - Agencies": 3, "Marketing - Global Strategic Insights": 2, "Marketing - Marketing Operations": 3, "Marketing - Media": 4, "Marketing - Professional Education & Access": 2, "Marketing - Sales & Distributor Services": 3, "R&D - Clinical Development": 4, "R&D - Research": 4, "Supply Chain Materials and Products - Active Pharmaceutical Ingredients (API)": 5, "Supply Chain Materials and Products - Biologics & Vaccines Materials": 5, "Supply Chain Materials and Products - Chemicals": 4, "Supply Chain Materials and Products - Electronic Systems": 4, "Supply Chain Materials and Products - External Manufacturing - EM": 5, "Supply Chain Materials and Products - Metals": 3, "Supply Chain Materials and Products - Packaging": 3, "Supply Chain Materials and Products - Precision Plastics": 3, "Uncategorized - Uncategorized": 2}
+MAX_CALCULATED_NOTIONAL_RISK = 1.944482
+MIN_CALCULATED_NOTIONAL_RISK = 0.477121
+
+# BPRA Correlation Risk
+SECTOR_CORR_BPRA_RISKS = {"CORPORATE": {"data_classification_1 score": 3.0, "privacy_data_types score": 3.0}}
+CATEGORY_CORR_BPRA_RISKS = {"Business Services - Corporate Services": {"data_classification_1 score": 3.0, "privacy_data_types score": 3.0, "hosting score": np.nan, "jjnet_connectivity score": np.nan, "business_impact score": np.nan}, "Business Services - HR Services": {"data_classification_1 score": 3.0, "privacy_data_types score": 3.0, "hosting score": np.nan, "jjnet_connectivity score": np.nan, "business_impact score": np.nan}, "Supply Chain Materials and Products - Chemicals": {"data_classification_1 score": 2.0, "privacy_data_types score": 1.0, "hosting score": np.nan, "jjnet_connectivity score": np.nan, "business_impact score": 3.0}, "Supply Chain Materials and Products - External Manufacturing - EM": {"data_classification_1 score": 2.0, "privacy_data_types score": 1.0, "hosting score": np.nan, "jjnet_connectivity score": np.nan, "business_impact score": 3.0}, "Supply Chain Materials and Products - Packaging": {"data_classification_1 score": 2.0, "privacy_data_types score": 1.0, "hosting score": np.nan, "jjnet_connectivity score": np.nan, "business_impact score": 3.0}, "Logistics - Distribution & Warehousing": {"data_classification_1 score": 2.0, "privacy_data_types score": 1.0, "hosting score": np.nan, "jjnet_connectivity score": np.nan, "business_impact score": 3.0}, "Supply Chain Materials and Products - Active Pharmaceutical Ingredients (API)": {"data_classification_1 score": 2.0, "privacy_data_types score": 1.0, "hosting score": np.nan, "jjnet_connectivity score": np.nan, "business_impact score": 3.0}, "Supply Chain Materials and Products - Biologics & Vaccines Materials": {"data_classification_1 score": 2.0, "privacy_data_types score": 1.0, "hosting score": np.nan, "jjnet_connectivity score": np.nan, "business_impact score": 3.0}, "Supply Chain Materials and Products - Electronic Systems": {"data_classification_1 score": 2.0, "privacy_data_types score": 1.0, "hosting score": np.nan, "jjnet_connectivity score": np.nan, "business_impact score": 3.0}, "Supply Chain Materials and Products - Metals": {"data_classification_1 score": 2.0, "privacy_data_types score": 1.0, "hosting score": np.nan, "jjnet_connectivity score": np.nan, "business_impact score": 3.0}, "Supply Chain Materials and Products - Precision Plastics": {"data_classification_1 score": 2.0, "privacy_data_types score": 1.0, "hosting score": np.nan, "jjnet_connectivity score": np.nan, "business_impact score": 3.0}, "Business Services - IT Infrastructure": {"data_classification_1 score": 3.0, "privacy_data_types score": np.nan, "hosting score": np.nan, "jjnet_connectivity score": np.nan, "business_impact score": np.nan}}
+SUBCATEGORY_CORR_BPRA_RISKS = {"Technical Services - Memberships & Subscriptions": {"data_classification_1 score": 3.0, "privacy_data_types score": np.nan, "hosting score": np.nan, "jjnet_connectivity score": np.nan, "business_impact score": np.nan}, "Technical Services - Quality": {"data_classification_1 score": 3.0, "privacy_data_types score": np.nan, "hosting score": np.nan, "jjnet_connectivity score": np.nan, "business_impact score": np.nan}, "IT Infrastructure - Data Center Hardware & Services": {"data_classification_1 score": np.nan, "privacy_data_types score": np.nan, "hosting score": 3.0, "jjnet_connectivity score": np.nan, "business_impact score": np.nan}, "IT Software": {"data_classification_1 score": np.nan, "privacy_data_types score": np.nan, "hosting score": 3.0, "jjnet_connectivity score": np.nan, "business_impact score": np.nan}, "IT Software as a Service Subscriptions": {"data_classification_1 score": np.nan, "privacy_data_types score": np.nan, "hosting score": 3.0, "jjnet_connectivity score": np.nan, "business_impact score": np.nan}}
+
+MAX_DATA_RISK = 6.0
+MIN_DATA_RISK = 2.0
+MAX_CYBER_RISK = 6.0
+MIN_CYBER_RISK = 2.0
+MAX_TECH_RISK = 2.0
+MIN_TECH_RISK = 0.666667
+
+# Model columns
+X_COLUMNS = ["Spending Quartile", "CL Metric Normalized", "Calculated Concentration Risk Normalized", 
+            "Calculated Notional Risk Normalized", "Data Risk Normalized", "Cyber Risk Normalized"]
+
+#==============================#
+# FEATURE ENGINEERING FUNCTIONS
+def normalize_metric(metric_val, metric_max, metric_min):
+    normalized_metric = (metric_val - metric_min)/(metric_max - metric_min)
+    return normalized_metric
+
+def process_spend_quartile(annual_spend, SPEND_QUARTILES):
+    spend_quartile = (np.searchsorted(SPEND_QUARTILES, annual_spend) + 1)/4
+    return(spend_quartile)
+
+def process_concentration_risk(tp_sectors, tp_categories, tp_subcategories, CONCENTRATION_RISKS, MAX_CONCENTRATION_MINIMUM):
+    if len(tp_sectors) != len(tp_categories) or len(tp_sectors) != len(tp_subcategories):
+        return np.nan
+    
+    tp_groupings_df = pd.DataFrame({"tp_sectors" : tp_sectors, "tp_categories" : tp_categories, "tp_subcategories" : tp_subcategories})
+    tp_groupings_df = tp_groupings_df.drop_duplicates()
+    tp_sectors = tp_groupings_df["tp_sectors"].to_list()
+    tp_categories = tp_groupings_df["tp_categories"].to_list()
+    tp_subcategories = tp_groupings_df["tp_subcategories"].to_list()
+    
+    concentration_risks = []
+    for i in range(len(tp_sectors)):
+        try:
+            concentration_risks.append(CONCENTRATION_RISKS[tp_sectors[i]][tp_categories[i]][tp_subcategories[i]])
+        except:
+            concentration_risks.append(1)
+    
+    conc_breadth_risk = len(concentration_risks)
+    conc_min = np.nanmin(concentration_risks)
+    calculated_concentration_risk = (np.log10(conc_breadth_risk) + 1) * np.log10(MAX_CONCENTRATION_MINIMUM / conc_min)
+    
+    return(calculated_concentration_risk)
+
+def find_count_for_max(xlst):
+    largest = max(xlst)
+    count = xlst.count(largest)
+    return count
+
+def find_count_for_min(xlst):
+    smallest = min(xlst)
+    count = xlst.count(smallest)
+    return count
+
+def process_criticality_level(criticality_levels, MAX_CL_MIN):
+    if len(criticality_levels) == 0:
+        return(0)
+    
+    min_cl = np.min(criticality_levels)
+    count_cl_min = find_count_for_min(criticality_levels)
+    cl_metric = np.log10(count_cl_min * MAX_CL_MIN / min_cl)
+    return(cl_metric)
+
+def process_notional_risk(tp_sectors, tp_categories, tp_families, SECTOR_NOTIONAL_RISKS, CATEGORY_NOTIONAL_RISKS):
+    if len(tp_sectors) != len(tp_categories) or len(tp_sectors) != len(tp_families):
+        return np.nan
+    
+    tp_groupings_df = pd.DataFrame({"tp_sectors" : tp_sectors, "tp_categories" : tp_categories, "tp_families" : tp_families})
+    tp_groupings_df = tp_groupings_df.drop_duplicates()
+    tp_sectors = tp_groupings_df["tp_sectors"].to_list()
+    tp_categories = tp_groupings_df["tp_categories"].to_list()
+    tp_families = tp_groupings_df["tp_families"].to_list()
+    
+    tp_sector_notional_risks = [SECTOR_NOTIONAL_RISKS.get(sect, np.nan) for sect in tp_sectors]
+    tp_fam_cat = [fam + " - " + cat for fam, cat in zip(tp_families, tp_categories)]
+    tp_category_notional_risks = [CATEGORY_NOTIONAL_RISKS.get(fam_cat, np.nan) for fam_cat in tp_fam_cat]
+    
+    tp_total_notional_risk = [sect_risk + cat_risk for sect_risk, cat_risk in zip(tp_sector_notional_risks, tp_category_notional_risks)]
+    tp_max_notional_risk = np.nanmax(tp_total_notional_risk)
+    tp_max_notional_risk_count = find_count_for_max(tp_total_notional_risk)
+    tp_calculated_notional_risk = np.log10(tp_max_notional_risk_count * tp_max_notional_risk)
+    
+    return(tp_calculated_notional_risk)
+
+def process_bpra_corr_risk(tp_sectors, tp_categories, tp_subcategories, tp_families, SECTOR_CORR_BPRA_RISKS, CATEGORY_CORR_BPRA_RISKS, SUBCATEGORY_CORR_BPRA_RISKS):
+    if len(tp_sectors) != len(tp_categories) or len(tp_sectors) != len(tp_families) or len(tp_sectors) != len(tp_subcategories):
+        return np.nan, np.nan
+    
+    tp_fam_cat = [fam + " - " + cat for fam, cat in zip(tp_families, tp_categories)]
+    
+    tp_bpra_corr_risks = pd.DataFrame(columns = ["data_classification_1 score", "privacy_data_types score", "jjnet_connectivity score", "hosting score"])
+    
+    for i in range(len(tp_sectors)):
+        tp_bpra_corr_risks.loc[(i * 3 + 0)] = SECTOR_CORR_BPRA_RISKS.get(tp_sectors[i])
+        tp_bpra_corr_risks.loc[(i * 3 + 1)] = CATEGORY_CORR_BPRA_RISKS.get(tp_fam_cat[i])
+        tp_bpra_corr_risks.loc[(i * 3 + 2)] = SUBCATEGORY_CORR_BPRA_RISKS.get(tp_subcategories[i])
+        
+    tp_bpra_corr_risks = tp_bpra_corr_risks.fillna(1)
+    
+    tp_bpra_corr_risks_scores = tp_bpra_corr_risks.max()
+    
+    data_risk = tp_bpra_corr_risks_scores["data_classification_1 score"] + tp_bpra_corr_risks_scores["privacy_data_types score"]
+    cyber_risk = tp_bpra_corr_risks_scores["jjnet_connectivity score"] + tp_bpra_corr_risks_scores["hosting score"]
+    
+    return data_risk, cyber_risk
+
+def probability_to_score(probabilities, model_classes):
+    high_index = np.where([x == "High" for x in model_classes])[0][0]
+    med_index = np.where([x == "Medium" for x in model_classes])[0][0]
+    low_index = np.where([x == "Low" for x in model_classes])[0][0]
+    
+    max_prob = np.argmax(probabilities)
+    
+    if max_prob == low_index:
+        prob_score = 0.333 - 0.333 * probabilities[low_index] + 0.333 * (1 - probabilities[low_index])
+    elif max_prob == med_index:
+        prob_score = 0.5 - 0.333 * probabilities[low_index] + 0.333 * probabilities[high_index]
+    else:
+        prob_score = 0.667 + 0.333 * probabilities[high_index] - 0.333 * (1 - probabilities[high_index])
+    
+    return round(prob_score, 3)
+    
 app = Flask(__name__)
-
+CORS(app)
 
 @app.route('/')
 def helloworld():
-    return 'welcome to risk scoring engine'
+    return 'Helloworld'
 
+# score testing example: http://localhost:5000/score?pl=5.0&pw=3.0&sl=1.2&sw=3.0
+# http://localhost:5000/score?pes_annual_spend=3000&pes_sectors=CONSUMER MEDICAL DEVICES,JANSSEN
 
-# score testing example: http://localhost:5000/score?pl=5.0&pw=3.0&sl=1.2&sw=2.5
-# http://100.0.0.3:5000/score?pl=5.0&pw=3.0&sl=1.2&sw=2.5
+gbm_class_model = joblib.load("gbm_class_model.joblib") ##
 
-
-rf = joblib.load(os.path.join("./uploads/rf_model.joblib"))  ## trained model
-
-@app.route('/score', methods=['POST', 'GET'])
-# @cross_origin()
+@app.route('/score', methods=['POST'])
+@cross_origin()
 def predict():
-    pl = request.values['pl']
-    pw = request.values['pw']  # passing prod data
-    sl = request.values['sl']  # passing prod data
-    sw = request.values['sw']  # passing prod data
+    json_data = request.get_json()
+    pes_annual_spend = json_data.get("pes_annual_spend") # e.g., 113334.21
+    pes_sectors = json_data.get("pes_sectors") # e.g., ['CONSUMER MEDICAL DEVICES', 'JANSSEN']
+    pes_categories = json_data.get("pes_categories") # e.g., ['IT Infrastructure', 'Agencies']
+    pes_subcategories = json_data.get("pes_subcategories") # e.g., ['IT Infrastructure - Data Center Hardware & Services', 'Public Relations & Communications']
+    pes_families = json_data.get("pes_families") # e.g., ['Business Services', 'Marketing']
+    
+    criticality_levels = json_data.get("criticality_levels") # e.g., [1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 2.0, 2.0, 2.0, 2.0, 2.0, 2.0, 2.0, 2.0, 2.0, 2.0, 2.0, 2.0, 2.0, 2.0, 2.0, 2.0, 2.0, 2.0, 2.0, 2.0, 2.0, 2.0, 3.0, 3.0, 3.0, 3.0, 3.0, 3.0, 3.0, 3.0, 3.0, 3.0, 3.0, 3.0, 3.0, 3.0, 3.0, 3.0, 3.0, 4.0, 4.0, 4.0, 4.0, 4.0, 4.0, 4.0, 4.0, 4.0, 4.0, 4.0, 4.0]
+    
+    in_hoi_list = json_data.get("in_hoi_list")
+    
+    # Feature engineering
+    spend_quartile = process_spend_quartile(pes_annual_spend, SPEND_QUARTILES)
+    concentration_risk = process_concentration_risk(pes_sectors, pes_categories, pes_subcategories, CONCENTRATION_RISKS, MAX_CONCENTRATION_MINIMUM)
+    cl_metric = process_criticality_level(criticality_levels, MAX_CL_MIN)
+    notional_risk = process_notional_risk(pes_sectors, pes_categories, pes_families, SECTOR_NOTIONAL_RISKS, CATEGORY_NOTIONAL_RISKS)
+    data_risk, cyber_risk = process_bpra_corr_risk(pes_sectors, pes_categories, pes_subcategories, pes_families, SECTOR_CORR_BPRA_RISKS, CATEGORY_CORR_BPRA_RISKS, SUBCATEGORY_CORR_BPRA_RISKS)
+    
+    spend_q_x_conc_risk = spend_quartile * concentration_risk
+    
+    # Feature normalization
+    concentration_risk_normalized = normalize_metric(concentration_risk, CALCULATED_CONCENTRATION_RISK_MAX, CALCULATED_CONCENTRATION_RISK_MIN)
+    spend_q_x_conc_risk_normalized = normalize_metric(spend_q_x_conc_risk, SPEND_X_CR_MAX, SPEND_X_CR_MIN)
+    cl_metric_normalized = normalize_metric(cl_metric, MAX_CL_METRIC, MIN_CL_METRIC)
+    notional_risk_normalized = normalize_metric(notional_risk, MAX_CALCULATED_NOTIONAL_RISK, MIN_CALCULATED_NOTIONAL_RISK)
+    data_risk_normalized = data_risk / MAX_DATA_RISK
+    cyber_risk_normalized = cyber_risk / MAX_CYBER_RISK
+    
+    # High level risks
+    tech_risk = data_risk_normalized + cyber_risk_normalized
+    tech_risk_normalized = normalize_metric(tech_risk, MAX_TECH_RISK, MIN_TECH_RISK)
+    business_disruption = (spend_quartile * concentration_risk_normalized)
+    consumer_impact = spend_quartile * (cl_metric_normalized + notional_risk_normalized)
+    business_risk = spend_quartile * (concentration_risk_normalized + cl_metric_normalized + notional_risk_normalized)
+    
+    risk_data = {"Spending Quartile" : spend_quartile,
+                    "Calculated Concentration Risk" : concentration_risk,
+                    "Calculated Concentration Risk Normalized" : concentration_risk_normalized,
+                    "Spend Quartile x Concentration Risk" : spend_q_x_conc_risk,
+                    "Spend Quartile x Concentration Risk Normalized" : spend_q_x_conc_risk_normalized,
+                    "CL Metric" : cl_metric,
+                    "CL Metric Normalized" : cl_metric_normalized,
+                    "Calculated Notional Risk" : notional_risk,
+                    "Calculated Notional Risk Normalized" : notional_risk_normalized,
+                    "Business Disruption" : business_disruption,
+                    "Consumer Impact" : consumer_impact,
+                    "Business Risk" : business_risk,
+                    "Data Risk" : data_risk,
+                    "Data Risk Normalized" : data_risk_normalized,
+                    "Cyber Risk" : cyber_risk,
+                    "Cyber Risk Normalized" : cyber_risk_normalized,
+                    "Tech Risk" : tech_risk,
+                    "Tech Risk Normalized" : tech_risk_normalized}
+    
+    risk_data = {k: round(v, 2) for k, v in risk_data.items()}
+    
+    inherent_risk_prediction = gbm_class_model.predict([np.array(pd.Series(risk_data)[X_COLUMNS])])[0]
 
-    flower = [pl, pw, sl, sw]
-    now = datetime.now()
-    current_time = now.strftime("%H:%M:%S")
+    predicted_probabilities = gbm_class_model.predict_proba([np.array(pd.Series(risk_data)[X_COLUMNS])])[0].round(3)
+    predicted_probabilities_score = probability_to_score(predicted_probabilities, gbm_class_model.classes_)
+    
+    # Additional rules for risk predictions
+    if in_hoi_list:
+        inherent_risk_prediction =  "High"
+    
+    supply_chain_logistics_families = ["Logistics", "Supply Chain Materials and Products"]
+    if any(tp_family in pes_families for tp_family in supply_chain_logistics_families) and inherent_risk_prediction == "Low":
+        inherent_risk_prediction = "Medium"
+    
+    risk_data["Inherent Risk Prediction"] = inherent_risk_prediction
+    risk_data["Inherent Risk Prediction Score"] = predicted_probabilities_score
+    
+    return(jsonify(risk_data))
 
-    ## below are the code to convert to json payload
-    result = {}
-    result['vendor'] = "vendor" + str(current_time)
-    result['input_pl'] = pl
-    result['input_pw'] = pw
-    result['input_sl'] = sl
-    result['input_sw'] = sw
-    result['output'] = str(rf.predict([flower]))
-    json_data = json.dumps(result)
-    return json_data
+#function for waitress by Gaurav
 
+def create_app():
+    return app
 
-if __name__ == "__main__":
-    app.run(debug=True)
+if __name__ == '__main__':
+    app.run(debug=False)
